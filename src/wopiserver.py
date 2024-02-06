@@ -343,7 +343,7 @@ def iopOpenInApp():
 
     try:
         userid, wopiuser = storage.getuseridfromcreds(usertoken, wopiuser)
-        inode, acctok, vm = utils.generateAccessToken(userid, fileid, viewmode, (username, wopiuser, usertype), folderurl,
+        inode, acctok, vm = utils.generateAccessToken(wopiuser, usertoken, fileid, viewmode, (username, wopiuser, usertype), folderurl,
                                                       endpoint, (appname, appurl, appviewurl),
                                                       req.headers.get('X-Trace-Id', 'N/A'))
     except IOError as e:
@@ -448,7 +448,7 @@ def iopWopiTest():
         return 'Missing arguments', http.client.BAD_REQUEST
     if Wopi.useHttps:
         return 'WOPI validator not supported in https mode', http.client.BAD_REQUEST
-    inode, acctok, _ = utils.generateAccessToken(usertoken, filepath, utils.ViewMode.READ_WRITE, ('test', 'test!' + usertoken),
+    inode, acctok, _ = utils.generateAccessToken('test', usertoken, filepath, utils.ViewMode.READ_WRITE, ('test', 'test!' + usertoken),
                                                  'http://folderurlfortestonly/', endpoint,
                                                  ('WOPI validator', 'http://fortestonly/', 'http://fortestonly/'), 'TestTrace')
     Wopi.log.info(f'msg="iopWopiTest: preparing test via WOPI validator" client="{req.remote_addr}"')

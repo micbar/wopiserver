@@ -145,7 +145,7 @@ def validateAndLogHeaders(op):
                 raise ValueError
         except ValueError:
             log.warning('msg="%s: invalid X-WOPI-Timestamp" user="%s" token="%s" client="%s"' %
-                        (op, acctok['userid'][-20:], flask.request.args['access_token'][-20:],
+                        (op, acctok['token'][-20:], flask.request.args['access_token'][-20:],
                          flask.request.headers.get(REALIPHEADER, flask.request.remote_addr)))
             # UNAUTHORIZED would seem more appropriate here, but the ProofKeys part of the MS test suite explicitly requires this
             return 'Invalid or expired X-WOPI-Timestamp header', http.client.INTERNAL_SERVER_ERROR
@@ -154,7 +154,7 @@ def validateAndLogHeaders(op):
     session = flask.request.headers.get('X-WOPI-SessionId')
     log.debug('msg="%s: client context" trace="%s" user="%s" filename="%s" token="%s" client="%s" deviceId="%s" reqId="%s" '
               'sessionId="%s" app="%s" appEndpoint="%s" correlationId="%s" wopits="%s"' %
-              (op.title(), acctok.get('trace', 'N/A'), acctok['userid'][-20:], acctok['filename'],
+              (op.title(), acctok.get('trace', 'N/A'), acctok['token'][-20:], acctok['filename'],
                flask.request.args['access_token'][-20:], flask.request.headers.get(REALIPHEADER, flask.request.remote_addr),
                flask.request.headers.get('X-WOPI-DeviceId'), flask.request.headers.get('X-Request-Id'),
                session, flask.request.headers.get('X-WOPI-RequestingApplication'),
@@ -211,7 +211,7 @@ def randomString(size):
     return ''.join([choice(ascii_lowercase) for _ in range(size)])
 
 
-def generateAccessToken(userid, fileid, viewmode, user, folderurl, endpoint, app, trace):
+def generateAccessToken(userid, token, fileid, viewmode, user, folderurl, endpoint, app, trace):
     '''Generates an access token for a given file and a given user, and returns a tuple with
     the file's inode and the URL-encoded access token.'''
     appname, appediturl, appviewurl = app
@@ -221,7 +221,7 @@ def generateAccessToken(userid, fileid, viewmode, user, folderurl, endpoint, app
     try:
         # stat the file to check for existence and get a version-invariant inode:
         # the inode serves as fileid (and must not change across save operations)
-        statinfo = st.statx(endpoint, fileid, userid)
+        statinfo = st.statx(endpoint, fileid, token)
     except IOError as e:
         log.info(f'msg="Requested file not found or not a file" fileid="{fileid}" error="{e}"')
         raise
@@ -236,7 +236,7 @@ def generateAccessToken(userid, fileid, viewmode, user, folderurl, endpoint, app
         # override preview mode when a new file is being created
         viewmode = ViewMode.READ_WRITE
     tokmd = {
-        'userid': userid, 'wopiuser': wopiuser, 'usertype': usertype.value, 'filename': statinfo['filepath'], 'fileid': fileid,
+        'userid': userid, 'token': token, 'wopiuser': wopiuser, 'usertype': usertype.value, 'filename': statinfo['filepath'], 'fileid': fileid,
         'username': friendlyname, 'viewmode': viewmode.value, 'folderurl': folderurl, 'endpoint': endpoint,
         'appname': appname, 'appediturl': appediturl, 'appviewurl': appviewurl, 'trace': trace,
         'exp': exptime, 'iss': f'cs3org:wopiserver:{WOPIVER}'    # standard claims
@@ -278,16 +278,16 @@ def retrieveWopiLock(fileid, operation, lockforlog, acctok, overridefn=None):
     if checkext and os.path.splitext(acctok['filename'])[1] not in srv.nonofficetypes:
         try:
             # first try to look for a MS Office lock
-            mslockstat = st.stat(acctok['endpoint'], getMicrosoftOfficeLockName(acctok['filename']), acctok['userid'])
+            mslockstat = st.stat(acctok['endpoint'], getMicrosoftOfficeLockName(acctok['filename']), acctok['token'])
             log.info('msg="Found existing MS Office lock" lockop="%s" user="%s" filename="%s" token="%s" lockmtime="%ld"' %
-                     (operation.title(), acctok['userid'][-20:], acctok['filename'], encacctok, mslockstat['mtime']))
+                     (operation.title(), acctok['token'][-20:], acctok['filename'], encacctok, mslockstat['mtime']))
             return EXTERNALLOCK, 'Microsoft Office for Desktop'
         except IOError:
             pass
         try:
             # then try to read a LibreOffice lock
-            lolockstat = st.statx(acctok['endpoint'], getLibreOfficeLockName(acctok['filename']), acctok['userid'], versioninv=0)
-            lolock = next(st.readfile(acctok['endpoint'], getLibreOfficeLockName(acctok['filename']), acctok['userid'], None))
+            lolockstat = st.statx(acctok['endpoint'], getLibreOfficeLockName(acctok['filename']), acctok['token'], versioninv=0)
+            lolock = next(st.readfile(acctok['endpoint'], getLibreOfficeLockName(acctok['filename']), acctok['token'], None))
             if isinstance(lolock, IOError):
                 # this might be an access error, optimistically move on
                 raise lolock
@@ -296,7 +296,7 @@ def retrieveWopiLock(fileid, operation, lockforlog, acctok, overridefn=None):
                 lolockholder = lolock.split(',')[1] if ',' in lolock else lolockstat['ownerid']
                 log.info('msg="Found existing LibreOffice lock" lockop="%s" user="%s" filename="%s" token="%s" '
                          'lockmtime="%ld" holder="%s"' %
-                         (operation.title(), acctok['userid'][-20:], acctok['filename'], encacctok,
+                         (operation.title(), acctok['token'][-20:], acctok['filename'], encacctok,
                           lolockstat['mtime'], lolockholder))
                 return EXTERNALLOCK, 'LibreOffice for Desktop'
         except (IOError, StopIteration):
@@ -304,33 +304,33 @@ def retrieveWopiLock(fileid, operation, lockforlog, acctok, overridefn=None):
 
     try:
         # fetch and decode the lock
-        lockcontent = st.getlock(acctok['endpoint'], overridefn if overridefn else acctok['filename'], acctok['userid'])
+        lockcontent = st.getlock(acctok['endpoint'], overridefn if overridefn else acctok['filename'], acctok['token'])
         # here we used to check the last save time to "extend" the validity of an otherwise expired lock:
         # however, this goes against isolating the lock expiration logic in the storage interfaces and ultimately
         # violates the WOPI specifications, therefore it was dropped
         if not lockcontent:
             log.info('msg="No lock found" lockop="%s" user="%s" filename="%s" token="%s"' %
-                     (operation.title(), acctok['userid'][-20:], acctok['filename'], encacctok))
+                     (operation.title(), acctok['token'][-20:], acctok['filename'], encacctok))
             # lazily remove the LibreOffice-compatible lock file, if it was detected and has
             # the expected signature - cf. setLock()
             try:
                 if lolock:
-                    st.removefile(acctok['endpoint'], getLibreOfficeLockName(acctok['filename']), acctok['userid'], True)
+                    st.removefile(acctok['endpoint'], getLibreOfficeLockName(acctok['filename']), acctok['token'], True)
             except IOError as e:
                 log.warning('msg="Unable to delete stale LibreOffice-compatible lock file" lockop="%s" user="%s" filename="%s" '
                             'fileid="%s" error="%s"' %
-                            (operation.title(), acctok['userid'][-20:], acctok['filename'], fileid, e))
+                            (operation.title(), acctok['token'][-20:], acctok['filename'], fileid, e))
             return None, None
         storedlock = lockcontent['lock_id']
         lockcontent['lock_id'] = _decodeLock(storedlock)
     except IOError as e:
         log.info('msg="Found non-compatible or unreadable lock" lockop="%s" user="%s" filename="%s" token="%s" error="%s"' %
-                 (operation.title(), acctok['userid'][-20:], acctok['filename'], encacctok, e))
+                 (operation.title(), acctok['token'][-20:], acctok['filename'], encacctok, e))
         return EXTERNALLOCK, 'Another app or user'
 
     log.info('msg="Retrieved lock" lockop="%s" user="%s" filename="%s" fileid="%s" lock="%s" '
              'retrievedlock="%s" expTime="%s" token="%s"' %
-             (operation.title(), acctok['userid'][-20:], acctok['filename'], fileid, lockforlog, lockcontent['lock_id'],
+             (operation.title(), acctok['token'][-20:], acctok['filename'], fileid, lockforlog, lockcontent['lock_id'],
               time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(lockcontent['expiration']['seconds'])), encacctok))
     return lockcontent['lock_id'], lockcontent['app_name']
 
@@ -447,7 +447,7 @@ def storeWopiFile(acctok, retrievedlock, xakey, targetname=''):
 
     writeerror = None
     try:
-        st.writefile(acctok['endpoint'], targetname, acctok['userid'],
+        st.writefile(acctok['endpoint'], targetname, acctok['token'],
                      flask.request.stream, flask.request.content_length,
                      (acctok['appname'], encodeLock(retrievedlock)))
     except IOError as e:
@@ -456,7 +456,7 @@ def storeWopiFile(acctok, retrievedlock, xakey, targetname=''):
         # something went wrong on write: we still want to setxattr but report this error to the caller
         writeerror = e
     # in all cases save the current time for later conflict checking: this is never older than the mtime of the file
-    st.setxattr(acctok['endpoint'], targetname, acctok['userid'], xakey, int(time.time()),
+    st.setxattr(acctok['endpoint'], targetname, acctok['token'], xakey, int(time.time()),
                 (acctok['appname'], encodeLock(retrievedlock)))
     if writeerror:
         raise writeerror
@@ -495,7 +495,7 @@ def storeAfterConflict(acctok, retrievedlock, lock, reason):
         reason += ', conflict copy created'
 
     # use a CONFLICT response as it is better handled by the app to signal the issue to the user
-    return makeConflictResponse('PUTFILE', acctok['userid'], retrievedlock, lock, 'NA',
+    return makeConflictResponse('PUTFILE', acctok['token'], retrievedlock, lock, 'NA',
                                 acctok['filename'], reason)
 
 
